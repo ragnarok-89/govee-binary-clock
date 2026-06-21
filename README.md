@@ -66,7 +66,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/home/<username>/clock_env/bin/python3 /home/<username>/binary_clock.py
+ExecStart=/home/<username>/clock_env/bin/python3 -u /home/<username>/binary_clock.py
 WorkingDirectory=/home/<username>
 Restart=always
 RestartSec=5
@@ -89,6 +89,11 @@ sudo systemctl start binary_clock
 ### Check if the service is running
 ```ini
 sudo systemctl status binary_clock
+```
+
+### View standard output
+```ini
+sudo journalctl -u binary_clock -f
 ```
 
 ### Stop the service
