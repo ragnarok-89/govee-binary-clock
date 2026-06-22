@@ -22,9 +22,9 @@ Update the following values in `settings.json` (Optional):
 ```
 colors
 brightness
+fade (values for TYPE are "discrete" or "transition")
 power_schedule
 weather
-fade (values for TYPE are "discrete" or "transition")
 ```
 
 ## Environment Setup

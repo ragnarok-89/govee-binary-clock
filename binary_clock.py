@@ -18,7 +18,7 @@ def load_settings():
     global BRIGHTNESS_MAX, BRIGHTNESS_NIGHT, DAYLIGHT_LEVEL_MAX
     global POWER_ON_TIME, POWER_OFF_TIME
     global WEATHER_REFRESH_INTERVAL, WEATHER_TRIGGER_SECONDS, WEATHER_DISPLAY_DURATION
-    global FADE_STEPS, FADE_DURATION, FADE_TYPE, WEATHER_SECONDS
+    global FADE_STEPS, FADE_DURATION, FADE_TYPE, WEATHER_SECONDS, STATUS_INTERVAL
 
     with open(SETTINGS_FILE) as f:
         _cfg = json.load(f)
@@ -58,6 +58,7 @@ def load_settings():
     WEATHER_REFRESH_INTERVAL = _cfg["weather"]["refresh_interval"]
     WEATHER_TRIGGER_SECONDS  = _cfg["weather"]["trigger_seconds"]
     WEATHER_DISPLAY_DURATION = _cfg["weather"]["display_duration"]
+    STATUS_INTERVAL = _cfg["power_schedule"]["device_check_interval"]
     FADE_STEPS    = _cfg["fade"]["steps"]
     FADE_DURATION = _cfg["fade"]["duration"]
     FADE_TYPE     = _cfg["fade"]["type"]
@@ -74,7 +75,14 @@ load_settings()
 
 
 UDP_PORT = 4003
+
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+recv_sock.bind(('', 4002))
+recv_sock.settimeout(0.3)
+
+device_responding = False
+last_status_check = 0
 
 def send_udp(message):
     sock.sendto(json.dumps(message).encode(), (DEVICE_IP, UDP_PORT))
@@ -104,6 +112,32 @@ def razer_term():
     send_udp({"msg": {"cmd": "status", "data": {}}})
     send_udp({"msg": {"cmd": "razer", "data": {"pt": "uwABsQAL"}}})
     send_udp({"msg": {"cmd": "status", "data": {}}})
+
+
+def check_device():
+    global device_responding, last_status_check
+    last_status_check = time.time()
+    send_udp({"msg": {"cmd": "status", "data": {}}})
+    try:
+        data, _ = recv_sock.recvfrom(1024)
+        msg = json.loads(data.decode())
+        on_off = msg.get("msg", {}).get("data", {}).get("onOff", 0)
+        if on_off == 1:
+            was_offline = not device_responding
+            device_responding = True
+            if was_offline:
+                print("Device reconnected.")
+            return was_offline
+        else:
+            if device_responding:
+                print("Device panels switched off.")
+            device_responding = False
+            return False
+    except socket.timeout:
+        if device_responding:
+            print("Device unplugged — no response.")
+        device_responding = False
+        return False
 
 
 def get_coords():
@@ -250,6 +284,8 @@ try:
         time.sleep(1)
         razer_init()
         time.sleep(2)
+        device_responding = True
+        last_status_check = time.time()
         print("Device powered on.")
     else:
         send_udp({"msg": {"cmd": "turn", "data": {"value": 0}}})
@@ -292,6 +328,21 @@ try:
             time.sleep((wake - now).total_seconds())
             continue
 
+        if time.time() - last_status_check >= STATUS_INTERVAL:
+            just_came_online = check_device()
+            if just_came_online:
+                print("Device reconnected — reinitializing.")
+                send_udp({"msg": {"cmd": "turn", "data": {"value": 1}}})
+                time.sleep(1)
+                razer_init()
+                time.sleep(2)
+                last_colors = [COLOR_OFF] * PANEL_COUNT
+                current_brightness = -1
+
+        if not device_responding:
+            time.sleep(1)
+            continue
+
         should_weather = now.second in WEATHER_SECONDS
 
         weather = get_weather()
@@ -321,3 +372,4 @@ except KeyboardInterrupt:
     razer_term()
     send_udp({"msg": {"cmd": "turn", "data": {"value": 0}}})
     sock.close()
+    recv_sock.close()

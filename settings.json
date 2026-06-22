@@ -29,18 +29,19 @@
         "min":          10,
         "daylight_max": 800
     },
+    "fade": {
+        "type":     "transition",
+        "steps":    15,
+        "duration": 0.6
+    },
     "power_schedule": {
-        "power_on_time":  "06:00",
-        "power_off_time": "23:00"
+        "power_on_time":       "06:00",
+        "power_off_time":      "23:00",
+        "device_check_interval": 5
     },
     "weather": {
         "refresh_interval":  300,
         "trigger_seconds":   [15,45],
         "display_duration":  3
-    },
-    "fade": {
-        "type":     "transition",
-        "steps":    15,
-        "duration": 0.6
     }
 }
