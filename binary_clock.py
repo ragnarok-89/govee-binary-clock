@@ -14,7 +14,7 @@ def load_settings():
     global DEVICE_IP, PANEL_COUNT, PUBLIC_IP, city_coords, weather_cache, weather_last_fetch
     global AM_PM, HOURS, MIN_TENS, MIN_ONES, SEC_TENS, SEC_ONES
     global COLOR_OFF, COLOR_AMPM_AM, COLOR_AMPM_PM, COLOR_HOUR, COLOR_MIN, COLOR_SEC
-    global COLOR_TEMP_HOT, COLOR_TEMP_COLD, COLOR_HUMIDITY, COLOR_UV
+    global COLOR_TEMP_HOT, COLOR_TEMP_COLD, COLOR_HUMIDITY, COLOR_UV, COLOR_ERROR
     global BRIGHTNESS_MAX, BRIGHTNESS_NIGHT, DAYLIGHT_LEVEL_MAX
     global POWER_ON_TIME, POWER_OFF_TIME
     global WEATHER_REFRESH_INTERVAL, WEATHER_TRIGGER_SECONDS, WEATHER_DISPLAY_DURATION
@@ -47,6 +47,7 @@ def load_settings():
     COLOR_TEMP_COLD = tuple(_cfg["colors"]["temp_cold"])
     COLOR_HUMIDITY  = tuple(_cfg["colors"]["humidity"])
     COLOR_UV        = tuple(_cfg["colors"]["uv"])
+    COLOR_ERROR     = tuple(_cfg["colors"]["error"])
 
     BRIGHTNESS_MAX     = _cfg["brightness"]["max"]
     BRIGHTNESS_NIGHT   = _cfg["brightness"]["min"]
@@ -83,6 +84,7 @@ recv_sock.settimeout(0.3)
 
 device_responding = False
 last_status_check = 0
+error_state       = False
 
 def send_udp(message):
     sock.sendto(json.dumps(message).encode(), (DEVICE_IP, UDP_PORT))
@@ -141,7 +143,7 @@ def check_device():
 
 
 def get_coords():
-    global city_coords
+    global city_coords, error_state
     if city_coords is not None:
         return city_coords
     try:
@@ -152,12 +154,13 @@ def get_coords():
         city_coords = (resp["lat"], resp["lon"])
         print(f"Location resolved: {resp.get('city', '')}, {resp.get('country', '')} → {city_coords}")
     except Exception as e:
+        error_state = True
         print(f"Location lookup failed: {e}")
     return city_coords
 
 
 def fetch_weather():
-    global weather_cache, weather_last_fetch
+    global weather_cache, weather_last_fetch, error_state
     try:
         coords = get_coords()
         if coords is None:
@@ -180,8 +183,10 @@ def fetch_weather():
         daylight = round(resp["current"]["shortwave_radiation"])
         weather_cache = (temp, humidity, uv, cloud, daylight)
         weather_last_fetch = time.time()
+        error_state = False
         print(f"Weather updated: {humidity}% humidity, UV {uv}, {temp}°C, cloud cover {cloud}%, daylight {daylight} W/m²")
     except Exception as e:
+        error_state = True
         print(f"Weather fetch failed: {e}")
 
 
@@ -219,6 +224,15 @@ def fade_and_wait(from_colors, to_colors):
         time.sleep(remaining)
 
 
+def send_with_error_blink(colors):
+    for i in range(4):
+        frame = list(colors)
+        for panel in AM_PM:
+            frame[panel] = COLOR_ERROR if i % 2 == 0 else COLOR_OFF
+        send_segment_color(frame)
+        time.sleep(0.25)
+
+
 def is_off_window():
     now = datetime.datetime.now().strftime("%H:%M")
     if POWER_OFF_TIME > POWER_ON_TIME:  # off window crosses midnight
@@ -239,8 +253,9 @@ def build_clock_colors(now):
 
     colors = [COLOR_OFF] * PANEL_COUNT
 
+    ampm_color = COLOR_AMPM_PM if is_pm else COLOR_AMPM_AM
     for panel in AM_PM:
-        colors[panel] = COLOR_AMPM_PM if is_pm else COLOR_AMPM_AM
+        colors[panel] = ampm_color
 
     set_bits(colors, HOURS,    hour12,        COLOR_HOUR)
     set_bits(colors, MIN_TENS, minute // 10,  COLOR_MIN)
@@ -360,7 +375,9 @@ try:
             in_weather = should_weather
         else:
             target = build_weather_colors(weather) if in_weather else build_clock_colors(now)
-            if not in_weather and FADE_TYPE == "transition":
+            if error_state and not in_weather:
+                send_with_error_blink(target)
+            elif not in_weather and FADE_TYPE == "transition":
                 fade_and_wait(last_colors, target)
             else:
                 send_segment_color(target)
