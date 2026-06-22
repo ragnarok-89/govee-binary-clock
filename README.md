@@ -1,27 +1,30 @@
-# Binary Clock — Raspberry Pi Setup Guide
+# Binary Clock - Raspberry Pi Setup Guide
 
 ## Initial Setup (done once)
 
 ### Panel Setup
-The order of the panels doesn't matter, so long as you update the arrays in the Panel Mappings section at the beginning of the Python file. The panels in Column B are for the hour (12 hour mode only), C and D for minutes, E and F for seconds, A and G for AM/PM.
+The order of the panels doesn't matter, so long as you update the arrays in the Panel Mappings section at the beginning of the `settings.json` file. The panels in Column B are for the hour (12 hour mode only), C and D for minutes, E and F for seconds, A and G for AM/PM.
 
 When the weather is displayed it uses column B and C for Humidity, D for the UV index, E and F for Temperature (°C)
 
 ![Panel Map](Panel_Map.png)
 
-### Python File Setup
-Update the following values (Required): 
+### Settings.json File Setup
+Update the following values in `settings.json` (Required):
 ```
-Govee Device Settings
-Panel Mappings
+device 
+panel_mappings
+
+If device public_ip is blank, fetch public ip for weather; otherwise use specified ip address. Prevents wrong weather if using a VPN
 ```
 
-Udate the following values (Optional):
+Update the following values in `settings.json` (Optional):
 ```
-Color Definitions
-Brightness Settings
-Power Schedule
-Weather Display Settings
+colors
+brightness
+power_schedule
+weather
+fade (values for TYPE are "discrete" or "transition")
 ```
 
 ## Environment Setup
@@ -31,8 +34,7 @@ Weather Display Settings
 sudo apt update && sudo apt upgrade -y
 ```
 
-### 2. Create a virtual Python environment.
-### This creates a sandboxed Python workspace in a folder called `clock_env` in your home directory.
+### 2. Create a virtual/sandboxed Python workspace in a folder called `clock_env` in your home directory.
 ```ini
 python3 -m venv ~/clock_env
 ```
@@ -49,7 +51,7 @@ pip install requests
 
 ### 5. Copy the script from your computer to the Pi
 ```ini
-scp binary_clock.py <username>@<device_IP>:~/binary_clock.py
+scp binary_clock.py settings.json <username>@<device_IP>:~/
 ```
 
 ### 6. Create a service file (so clock auto-starts after device reboot)
@@ -75,7 +77,7 @@ User=<username>
 [Install]
 WantedBy=multi-user.target
 ```
-### Press `Ctrl+X`, then `Y`, then `Enter` to save and exit
+##### Press `Ctrl+X`, then `Y`, then `Enter` to save and exit
 
 ### 7. Register and start the service
 ```ini
@@ -86,9 +88,15 @@ sudo systemctl start binary_clock
 
 ## Ongoing Operations
 
-### Check if the service is running
+### Update `settings.json` 
+Changes are detected automatically within 1 second - no service restart required.
+
+### Update `binary_clock.py` 
+Service restart required.
+
+### Restart the service
 ```ini
-sudo systemctl status binary_clock
+sudo systemctl restart binary_clock
 ```
 
 ### View standard output
@@ -101,7 +109,7 @@ sudo journalctl -u binary_clock -f
 sudo systemctl stop binary_clock
 ```
 
-### Restart the service
+### Check if the service is running
 ```ini
-sudo systemctl restart binary_clock
+sudo systemctl status binary_clock
 ```

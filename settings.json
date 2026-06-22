@@ -1,0 +1,46 @@
+{
+    "device": {
+        "public_ip": "",
+        "lan_ip": "192.168.1.14",
+        "panel_count": 20
+    },
+    "panel_mappings": {
+        "am_pm":    [0, 9],
+        "hours":    [15, 14, 1, 2],
+        "min_tens": [16, 13, 3],
+        "min_ones": [17, 12, 4, 5],
+        "sec_tens": [18, 11, 6],
+        "sec_ones": [19, 10, 8, 7]
+    },
+    "colors": {
+        "off":       [0,   0,   0],
+        "ampm_am":   [255, 180,  0],
+        "ampm_pm":   [120,   0, 255],
+        "hour":      [255,  30,   0],
+        "min":       [0,  200,   0],
+        "sec":       [0,   80, 255],
+        "temp_hot":  [255,  30,   0],
+        "temp_cold": [0,   80, 255],
+        "humidity":  [100, 200, 255],
+        "uv":        [180,   0, 255]
+    },
+    "brightness": {
+        "max":          100,
+        "min":          10,
+        "daylight_max": 800
+    },
+    "power_schedule": {
+        "power_on_time":  "06:00",
+        "power_off_time": "23:00"
+    },
+    "weather": {
+        "refresh_interval":  300,
+        "trigger_seconds":   [15,45],
+        "display_duration":  3
+    },
+    "fade": {
+        "type":     "transition",
+        "steps":    15,
+        "duration": 0.6
+    }
+}

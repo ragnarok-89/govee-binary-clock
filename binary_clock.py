@@ -1,3 +1,4 @@
+import os
 import socket
 import json
 import base64
@@ -5,61 +6,76 @@ import time
 import datetime
 import requests
 
-#Govee device settings
-DEVICE_IP = "192.168.1.14"
-PANEL_COUNT = 20
-COUNTRY = "CA" #Country codes: https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2#Officially_assigned_code_elements
-CITY    = "Montreal"
+SETTINGS_FILE  = "settings.json"
+settings_mtime = 0
+
+def load_settings():
+    global settings_mtime
+    global DEVICE_IP, PANEL_COUNT, PUBLIC_IP, city_coords
+    global AM_PM, HOURS, MIN_TENS, MIN_ONES, SEC_TENS, SEC_ONES
+    global COLOR_OFF, COLOR_AMPM_AM, COLOR_AMPM_PM, COLOR_HOUR, COLOR_MIN, COLOR_SEC
+    global COLOR_TEMP_HOT, COLOR_TEMP_COLD, COLOR_HUMIDITY, COLOR_UV
+    global BRIGHTNESS_MAX, BRIGHTNESS_NIGHT, DAYLIGHT_LEVEL_MAX
+    global POWER_ON_TIME, POWER_OFF_TIME
+    global WEATHER_REFRESH_INTERVAL, WEATHER_TRIGGER_SECONDS, WEATHER_DISPLAY_DURATION
+    global FADE_STEPS, FADE_DURATION, FADE_TYPE, WEATHER_SECONDS
+
+    with open(SETTINGS_FILE) as f:
+        _cfg = json.load(f)
+
+    DEVICE_IP   = _cfg["device"]["lan_ip"]
+    PANEL_COUNT = _cfg["device"]["panel_count"]
+    PUBLIC_IP   = _cfg["device"]["public_ip"]
+    city_coords = None
+
+    AM_PM    = _cfg["panel_mappings"]["am_pm"]
+    HOURS    = _cfg["panel_mappings"]["hours"]
+    MIN_TENS = _cfg["panel_mappings"]["min_tens"]
+    MIN_ONES = _cfg["panel_mappings"]["min_ones"]
+    SEC_TENS = _cfg["panel_mappings"]["sec_tens"]
+    SEC_ONES = _cfg["panel_mappings"]["sec_ones"]
+
+    COLOR_OFF       = tuple(_cfg["colors"]["off"])
+    COLOR_AMPM_AM   = tuple(_cfg["colors"]["ampm_am"])
+    COLOR_AMPM_PM   = tuple(_cfg["colors"]["ampm_pm"])
+    COLOR_HOUR      = tuple(_cfg["colors"]["hour"])
+    COLOR_MIN       = tuple(_cfg["colors"]["min"])
+    COLOR_SEC       = tuple(_cfg["colors"]["sec"])
+    COLOR_TEMP_HOT  = tuple(_cfg["colors"]["temp_hot"])
+    COLOR_TEMP_COLD = tuple(_cfg["colors"]["temp_cold"])
+    COLOR_HUMIDITY  = tuple(_cfg["colors"]["humidity"])
+    COLOR_UV        = tuple(_cfg["colors"]["uv"])
+
+    BRIGHTNESS_MAX     = _cfg["brightness"]["max"]
+    BRIGHTNESS_NIGHT   = _cfg["brightness"]["min"]
+    DAYLIGHT_LEVEL_MAX = _cfg["brightness"]["daylight_max"]
+
+    POWER_ON_TIME  = _cfg["power_schedule"]["power_on_time"]
+    POWER_OFF_TIME = _cfg["power_schedule"]["power_off_time"]
+
+    WEATHER_REFRESH_INTERVAL = _cfg["weather"]["refresh_interval"]
+    WEATHER_TRIGGER_SECONDS  = _cfg["weather"]["trigger_seconds"]
+    WEATHER_DISPLAY_DURATION = _cfg["weather"]["display_duration"]
+    FADE_STEPS    = _cfg["fade"]["steps"]
+    FADE_DURATION = _cfg["fade"]["duration"]
+    FADE_TYPE     = _cfg["fade"]["type"]
+    WEATHER_SECONDS = {
+        (s + d) % 60
+        for s in WEATHER_TRIGGER_SECONDS
+        for d in range(WEATHER_DISPLAY_DURATION)
+    }
+
+    settings_mtime = os.path.getmtime(SETTINGS_FILE)
+
+
+load_settings()
+
+
 UDP_PORT = 4003
-
-#Panel mappings - index 0 = LSB (bit 0), last index = MSB
-AM_PM    = [0, 9]
-HOURS    = [15, 14, 1, 2]
-MIN_TENS = [16, 13, 3]
-MIN_ONES = [17, 12, 4, 5]
-SEC_TENS = [18, 11, 6]
-SEC_ONES = [19, 10, 8, 7]
-
-#Color definitions (R, G, B)
-COLOR_OFF       = (0,   0,   0)   #none/off
-COLOR_AMPM_AM   = (255, 180,  0)  #amber
-COLOR_AMPM_PM   = (120,   0, 255) #purple
-COLOR_HOUR      = (255,  30,   0) #orange-red
-COLOR_MIN       = (0,  200,   0)  #green
-COLOR_SEC       = (0,   80, 255)  #blue
-COLOR_TEMP_HOT  = (255,  30,   0) #orange-red
-COLOR_TEMP_COLD = (0,   80, 255)  #blue
-COLOR_HUMIDITY  = (100, 200, 255) #light blue
-COLOR_UV        = (180,   0, 255) #violet
-
-#Brightness settings
-BRIGHTNESS_DAY   = 100      #brightness during the day (0-100)
-BRIGHTNESS_NIGHT = 10       #brightness at night (0-100)
-NIGHT_START_TIME = "22:00"  #time when night mode begins (HH:MM, 24hr)
-NIGHT_END_TIME   = "06:00"  #time when night mode ends (HH:MM, 24hr)
-
-#Power schedule
-POWER_ON_TIME    = "06:00"  #time to power on the device (HH:MM, 24hr)
-POWER_OFF_TIME   = "23:00"  #time to power off the device (HH:MM, 24hr)
-
-#Weather Display Settings
-WEATHER_REFRESH_INTERVAL = 300  #re-fetch every 5 minutes
-WEATHER_TRIGGER_SECONDS  = [30] #seconds at which weather display starts; can include multiple values e.g. [0, 30] to show on both minute and half-minute
-WEATHER_DISPLAY_DURATION = 3    #how many seconds to show weather
-WEATHER_SECONDS = {
-    (s + d) % 60
-    for s in WEATHER_TRIGGER_SECONDS
-    for d in range(WEATHER_DISPLAY_DURATION)
-}
-FADE_STEPS    = 15   #number of frames in the transition
-FADE_DURATION = 0.6  #total seconds the fade takes
-
-
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 weather_cache = None
 weather_last_fetch = 0
 city_coords = None
-
 
 def send_udp(message):
     sock.sendto(bytes(json.dumps(message), "utf-8"), (DEVICE_IP, UDP_PORT))
@@ -91,31 +107,27 @@ def razer_term():
     send_udp({"msg": {"cmd": "status", "data": {}}})
 
 
-def get_city_coords():
+def get_coords():
     global city_coords
     if city_coords is not None:
         return city_coords
-    resp = requests.get(
-        "https://geocoding-api.open-meteo.com/v1/search",
-        params={"name": CITY, "count": 1, "language": "en", "format": "json"},
-        timeout=5
-    ).json()
-    result = resp["results"][0]
-    city_coords = (result["latitude"], result["longitude"])
-    print(f"Location resolved: {result['name']}, {result.get('country', '')} → {city_coords}")
+    url = f"https://ipapi.co/{PUBLIC_IP}/json/" if PUBLIC_IP else "https://ipapi.co/json/"
+    resp = requests.get(url, timeout=5).json()
+    city_coords = (resp["latitude"], resp["longitude"])
+    print(f"Location resolved: {resp.get('city', '')}, {resp.get('country_name', '')} → {city_coords}")
     return city_coords
 
 
 def fetch_weather():
     global weather_cache, weather_last_fetch
     try:
-        lat, lon = get_city_coords()
+        lat, lon = get_coords()
         resp = requests.get(
             "https://api.open-meteo.com/v1/forecast",
             params={
                 "latitude": lat,
                 "longitude": lon,
-                "current": "temperature_2m,relative_humidity_2m,uv_index,cloud_cover"
+                "current": "temperature_2m,relative_humidity_2m,uv_index,cloud_cover,shortwave_radiation"
             },
             timeout=5
         ).json()
@@ -123,9 +135,10 @@ def fetch_weather():
         humidity = round(resp["current"]["relative_humidity_2m"])
         uv = round(resp["current"]["uv_index"])
         cloud = round(resp["current"]["cloud_cover"])
-        weather_cache = (temp, humidity, uv, cloud)
+        daylight = round(resp["current"]["shortwave_radiation"])
+        weather_cache = (temp, humidity, uv, cloud, daylight)
         weather_last_fetch = time.time()
-        print(f"Weather updated: {humidity}% humidity, UV {uv}, {temp}°C, cloud cover {cloud}%")
+        print(f"Weather updated: {humidity}% humidity, UV {uv}, {temp}°C, cloud cover {cloud}%, daylight {daylight} W/m²")
     except Exception as e:
         print(f"Weather fetch failed: {e}")
 
@@ -164,15 +177,9 @@ def is_off_window():
     return POWER_OFF_TIME <= now < POWER_ON_TIME
 
 
-def get_target_brightness(cloud=0):
-    now = datetime.datetime.now().strftime("%H:%M")
-    if NIGHT_START_TIME > NIGHT_END_TIME:  # night window crosses midnight
-        in_night = now >= NIGHT_START_TIME or now < NIGHT_END_TIME
-    else:
-        in_night = NIGHT_START_TIME <= now < NIGHT_END_TIME
-    if in_night:
-        return BRIGHTNESS_NIGHT
-    return round(BRIGHTNESS_DAY - (BRIGHTNESS_DAY - BRIGHTNESS_NIGHT) * cloud / 100)
+def get_target_brightness(daylight=0):
+    ratio = min(daylight / DAYLIGHT_LEVEL_MAX, 1.0)
+    return round(BRIGHTNESS_NIGHT + (BRIGHTNESS_MAX - BRIGHTNESS_NIGHT) * ratio)
 
 
 def build_clock_colors():
@@ -203,7 +210,7 @@ def build_weather_colors():
     if weather is None:
         return colors
 
-    temp, humidity, uv, cloud = weather
+    temp, humidity, uv = weather[:3]
     temp_color = COLOR_TEMP_HOT if temp >= 0 else COLOR_TEMP_COLD
     abs_temp = abs(temp)
 
@@ -236,6 +243,11 @@ try:
         print(f"Starting in off window — device powered off until {POWER_ON_TIME}.")
 
     while True:
+        if os.path.getmtime(SETTINGS_FILE) != settings_mtime:
+            load_settings()
+            current_brightness = -1
+            print("Settings reloaded.")
+
         now = datetime.datetime.now()
         current_time = now.strftime("%H:%M")
 
@@ -271,8 +283,8 @@ try:
         should_weather = now.second in WEATHER_SECONDS
 
         weather = get_weather()
-        cloud = weather[3] if weather else 0
-        brightness = get_target_brightness(cloud)
+        daylight = weather[4] if weather else 0
+        brightness = get_target_brightness(daylight)
         if brightness != current_brightness:
             send_udp({"msg": {"cmd": "brightness", "data": {"value": brightness}}})
             current_brightness = brightness
@@ -287,9 +299,16 @@ try:
             if remaining > 0:
                 time.sleep(remaining)
         else:
-            last_colors = build_weather_colors() if in_weather else build_clock_colors()
-            send_segment_color(last_colors)
-            time.sleep(1)
+            target = build_weather_colors() if in_weather else build_clock_colors()
+            if not in_weather and FADE_TYPE == "transition":
+                fade_to(last_colors, target)
+                remaining = 1.0 - FADE_DURATION
+                if remaining > 0:
+                    time.sleep(remaining)
+            else:
+                send_segment_color(target)
+                time.sleep(1)
+            last_colors = target
 
 except KeyboardInterrupt:
     print("\nShutting down...")
