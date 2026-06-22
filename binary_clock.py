@@ -4,6 +4,7 @@ import json
 import base64
 import time
 import datetime
+import threading
 import requests
 
 SETTINGS_FILE  = "settings.json"
@@ -82,9 +83,10 @@ recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 recv_sock.bind(('', 4002))
 recv_sock.settimeout(0.3)
 
-device_responding = False
-last_status_check = 0
-error_state       = False
+device_responding  = False
+last_status_check  = 0
+error_state        = False
+_fetch_in_progress = False
 
 def send_udp(message):
     sock.sendto(json.dumps(message).encode(), (DEVICE_IP, UDP_PORT))
@@ -160,7 +162,7 @@ def get_coords():
 
 
 def fetch_weather():
-    global weather_cache, weather_last_fetch, error_state
+    global weather_cache, weather_last_fetch, error_state, _fetch_in_progress
     try:
         coords = get_coords()
         if coords is None:
@@ -187,12 +189,39 @@ def fetch_weather():
         print(f"Weather updated: {humidity}% humidity, UV {uv}, {temp}°C, cloud cover {cloud}%, daylight {daylight} W/m²")
     except Exception as e:
         error_state = True
+        weather_last_fetch = time.time()
         print(f"Weather fetch failed: {e}")
+    finally:
+        _fetch_in_progress = False
+
+
+def connectivity_check_loop():
+    global error_state
+    connected = True
+    while True:
+        try:
+            socket.create_connection(("8.8.8.8", 53), timeout=3).close()
+            if not connected:
+                print("Internet connectivity restored.")
+                connected = True
+                global weather_last_fetch
+                weather_last_fetch = 0
+        except OSError:
+            if connected:
+                print("Internet connectivity lost.")
+                connected = False
+            error_state = True
+        time.sleep(10)
+
 
 
 def get_weather():
-    if weather_cache is None or (time.time() - weather_last_fetch) > WEATHER_REFRESH_INTERVAL:
-        fetch_weather()
+    global _fetch_in_progress
+    interval = 30 if error_state else WEATHER_REFRESH_INTERVAL
+    if weather_cache is None or (time.time() - weather_last_fetch) > interval:
+        if not _fetch_in_progress:
+            _fetch_in_progress = True
+            threading.Thread(target=fetch_weather, daemon=True).start()
     return weather_cache
 
 
@@ -287,6 +316,7 @@ def build_weather_colors(weather):
 
 try:
     print("Binary Clock Starting — Press Ctrl+C to quit")
+    threading.Thread(target=connectivity_check_loop, daemon=True).start()
     fetch_weather()
 
     device_on = not is_off_window()
@@ -370,12 +400,15 @@ try:
 
         if should_weather != in_weather:
             target = build_weather_colors(weather) if should_weather else build_clock_colors(now)
-            fade_and_wait(last_colors, target)
+            if error_state:
+                send_with_error_blink(target)
+            else:
+                fade_and_wait(last_colors, target)
             last_colors = target
             in_weather = should_weather
         else:
             target = build_weather_colors(weather) if in_weather else build_clock_colors(now)
-            if error_state and not in_weather:
+            if error_state:
                 send_with_error_blink(target)
             elif not in_weather and FADE_TYPE == "transition":
                 fade_and_wait(last_colors, target)
