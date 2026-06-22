@@ -3,7 +3,7 @@
 ## Initial Setup (done once)
 
 ### Panel Setup
-The order of the panels doesn't matter, so long as you update the arrays in the Panel Mappings section at the beginning of the `settings.json` file. The panels in Column B are for the hour (12 hour mode only), C and D for minutes, E and F for seconds, A and G for AM/PM.
+The order of the panels doesn't matter, so long as you update the arrays in the Panel Mappings in the `settings.json` file. The panels in Column B are for the hour (12 hour mode only), C and D for minutes, E and F for seconds, A and G for AM/PM.
 
 When the weather is displayed it uses column B and C for Humidity, D for the UV index, E and F for Temperature (°C)
 

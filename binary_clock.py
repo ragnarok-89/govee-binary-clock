@@ -11,7 +11,7 @@ settings_mtime = 0
 
 def load_settings():
     global settings_mtime
-    global DEVICE_IP, PANEL_COUNT, PUBLIC_IP, city_coords
+    global DEVICE_IP, PANEL_COUNT, PUBLIC_IP, city_coords, weather_cache, weather_last_fetch
     global AM_PM, HOURS, MIN_TENS, MIN_ONES, SEC_TENS, SEC_ONES
     global COLOR_OFF, COLOR_AMPM_AM, COLOR_AMPM_PM, COLOR_HOUR, COLOR_MIN, COLOR_SEC
     global COLOR_TEMP_HOT, COLOR_TEMP_COLD, COLOR_HUMIDITY, COLOR_UV
@@ -26,7 +26,9 @@ def load_settings():
     DEVICE_IP   = _cfg["device"]["lan_ip"]
     PANEL_COUNT = _cfg["device"]["panel_count"]
     PUBLIC_IP   = _cfg["device"]["public_ip"]
-    city_coords = None
+    city_coords   = None
+    weather_cache = None
+    weather_last_fetch = 0
 
     AM_PM    = _cfg["panel_mappings"]["am_pm"]
     HOURS    = _cfg["panel_mappings"]["hours"]
@@ -73,12 +75,9 @@ load_settings()
 
 UDP_PORT = 4003
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-weather_cache = None
-weather_last_fetch = 0
-city_coords = None
 
 def send_udp(message):
-    sock.sendto(bytes(json.dumps(message), "utf-8"), (DEVICE_IP, UDP_PORT))
+    sock.sendto(json.dumps(message).encode(), (DEVICE_IP, UDP_PORT))
 
 
 def send_segment_color(colors):
@@ -111,17 +110,26 @@ def get_coords():
     global city_coords
     if city_coords is not None:
         return city_coords
-    url = f"https://ipapi.co/{PUBLIC_IP}/json/" if PUBLIC_IP else "https://ipapi.co/json/"
-    resp = requests.get(url, timeout=5).json()
-    city_coords = (resp["latitude"], resp["longitude"])
-    print(f"Location resolved: {resp.get('city', '')}, {resp.get('country_name', '')} → {city_coords}")
+    try:
+        url = f"http://ip-api.com/json/{PUBLIC_IP}" if PUBLIC_IP else "http://ip-api.com/json"
+        resp = requests.get(url, timeout=5).json()
+        if resp.get("status") != "success":
+            raise Exception(resp.get("message", "unknown error"))
+        city_coords = (resp["lat"], resp["lon"])
+        print(f"Location resolved: {resp.get('city', '')}, {resp.get('country', '')} → {city_coords}")
+    except Exception as e:
+        print(f"Location lookup failed: {e}")
     return city_coords
 
 
 def fetch_weather():
     global weather_cache, weather_last_fetch
     try:
-        lat, lon = get_coords()
+        coords = get_coords()
+        if coords is None:
+            weather_last_fetch = time.time()
+            return
+        lat, lon = coords
         resp = requests.get(
             "https://api.open-meteo.com/v1/forecast",
             params={
@@ -155,19 +163,26 @@ def set_bits(colors, panels, value, on_color):
 
 
 def lerp_color(c1, c2, t):
-    return tuple(round(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
+    return tuple(round(a + (b - a) * t) for a, b in zip(c1, c2))
 
 
 def fade_to(from_colors, to_colors):
     start = time.perf_counter()
     for step in range(1, FADE_STEPS + 1):
         t = step / FADE_STEPS
-        blended = [lerp_color(from_colors[i], to_colors[i], t) for i in range(PANEL_COUNT)]
+        blended = [lerp_color(a, b, t) for a, b in zip(from_colors, to_colors)]
         send_segment_color(blended)
         target = start + FADE_DURATION * step / FADE_STEPS
         remaining = target - time.perf_counter()
         if remaining > 0:
             time.sleep(remaining)
+
+
+def fade_and_wait(from_colors, to_colors):
+    fade_to(from_colors, to_colors)
+    remaining = 1.0 - FADE_DURATION
+    if remaining > 0:
+        time.sleep(remaining)
 
 
 def is_off_window():
@@ -182,8 +197,7 @@ def get_target_brightness(daylight=0):
     return round(BRIGHTNESS_NIGHT + (BRIGHTNESS_MAX - BRIGHTNESS_NIGHT) * ratio)
 
 
-def build_clock_colors():
-    now = datetime.datetime.now()
+def build_clock_colors(now):
     hour12 = now.hour % 12 or 12
     is_pm = now.hour >= 12
     minute = now.minute
@@ -203,8 +217,7 @@ def build_clock_colors():
     return colors
 
 
-def build_weather_colors():
-    weather = get_weather()
+def build_weather_colors(weather):
     colors = [COLOR_OFF] * PANEL_COUNT
 
     if weather is None:
@@ -267,17 +280,16 @@ try:
             in_weather = False
             last_colors = [COLOR_OFF] * PANEL_COUNT
             current_brightness = -1
-            target = build_clock_colors()
+            target = build_clock_colors(now)
             fade_to(last_colors, target)
             last_colors = target
 
         if not device_on:
-            now_dt = datetime.datetime.now()
             on_h, on_m = map(int, POWER_ON_TIME.split(":"))
-            wake = now_dt.replace(hour=on_h, minute=on_m, second=0, microsecond=0)
-            if wake <= now_dt:
+            wake = now.replace(hour=on_h, minute=on_m, second=0, microsecond=0)
+            if wake <= now:
                 wake += datetime.timedelta(days=1)
-            time.sleep((wake - now_dt).total_seconds())
+            time.sleep((wake - now).total_seconds())
             continue
 
         should_weather = now.second in WEATHER_SECONDS
@@ -291,20 +303,14 @@ try:
             print(f"Brightness set to {brightness}")
 
         if should_weather != in_weather:
-            target = build_weather_colors() if should_weather else build_clock_colors()
-            fade_to(last_colors, target)
+            target = build_weather_colors(weather) if should_weather else build_clock_colors(now)
+            fade_and_wait(last_colors, target)
             last_colors = target
             in_weather = should_weather
-            remaining = 1.0 - FADE_DURATION
-            if remaining > 0:
-                time.sleep(remaining)
         else:
-            target = build_weather_colors() if in_weather else build_clock_colors()
+            target = build_weather_colors(weather) if in_weather else build_clock_colors(now)
             if not in_weather and FADE_TYPE == "transition":
-                fade_to(last_colors, target)
-                remaining = 1.0 - FADE_DURATION
-                if remaining > 0:
-                    time.sleep(remaining)
+                fade_and_wait(last_colors, target)
             else:
                 send_segment_color(target)
                 time.sleep(1)
